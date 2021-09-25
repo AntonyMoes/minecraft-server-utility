@@ -1,0 +1,13 @@
+{
+  "iteration_time": 3600,
+  "error_iteration_time": 10800,
+  "webhook": "",
+  "server_host": "TODO",
+  "server_user": "TODO",
+  "server_use_host_keys": true,
+  "server_password": "",
+  "server_minecraft_directory": "TODO",
+  "backup_directory": "TODO",
+  "backup_allowed_gigabytes": 60,
+  "backup_warning_ratio": 0.75
+}
