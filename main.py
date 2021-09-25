@@ -61,16 +61,17 @@ async def backup(config: Config) -> (str, Optional[Error]):
             return '', Error(f'Could not open minecraft directory "{config.server_minecraft_directory}": {err}')
 
         archive_name = f'world-{datetime.now().strftime("%Y-%m-%d_%H_%M")}.tar.gz'
+        stack.callback(lambda: ssh.exec_command(f'{cd} && rm {archive_name}'))
+
         _, err = get_command_outputs(ssh, f'{cd} && tar -czf {archive_name} world')
         if len(err) > 0:
-            ssh.exec_command(f'{cd} && rm {archive_name}')
             return '', Error(f'Could not compress minecraft world: {err}')
 
         scp = SCPClient(ssh.get_transport())
         stack.callback(scp.close)
 
         try:
-            scp.get(f'{config.server_minecraft_directory}/{archive_name}')
+            scp.get(f'{config.server_minecraft_directory}/{archive_name}', local_path=config.backup_directory)
         except SCPException as e:
             return '', Error(f'Could not copy archive to the local directory {config.backup_directory}: {e}')
 
