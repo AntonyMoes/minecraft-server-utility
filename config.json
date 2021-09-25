@@ -1,13 +1,24 @@
 {
   "iteration_time": 3600,
   "error_iteration_time": 10800,
-  "webhook": "",
+  "webhook": "TODO: discord webhook url",
   "server_host": "TODO",
   "server_user": "TODO",
   "server_use_host_keys": true,
-  "server_password": "",
-  "server_minecraft_directory": "TODO",
+  "server_password": "TODO: only required if the setting above is false",
+  "server_minecraft_directory": "TODO: remote sever directory where your minecraft server is running",
   "backup_directory": "TODO",
   "backup_allowed_gigabytes": 60,
-  "backup_warning_ratio": 0.75
+  "backup_warning_ratio": 0.75,
+  "warning_mentions": [
+    {
+      "id": "TODO: long user id that requires dev settings"
+    }
+  ],
+  "error_mentions": [
+    {
+      "id": "TODO: long role id that requires dev settings",
+      "is_role": true
+    }
+  ]
 }

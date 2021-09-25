@@ -1,5 +1,3 @@
-import socket
-
 from asyncio import get_event_loop, AbstractEventLoop, sleep
 import aiohttp
 import json
@@ -21,6 +19,15 @@ Error = NewType('Error', str)
 
 
 @dataclass
+class Mention:
+    id: str
+    is_role: bool = False
+
+    def __str__(self) -> str:
+        return f'<@{"&" if self.is_role else ""}{self.id}>'
+
+
+@dataclass
 class Config:
     iteration_time: int
     error_iteration_time: int
@@ -33,6 +40,8 @@ class Config:
     backup_directory: str
     backup_allowed_gigabytes: float
     backup_warning_ratio: float
+    warning_mentions: list[Mention]
+    error_mentions: list[Mention]
 
 
 def get_command_outputs(ssh: SSHClient, command: str) -> (str, str):
@@ -118,6 +127,13 @@ async def notify(message: str, webhook: str):
             print(resp)
 
 
+def get_mentions(mentions: list[Mention]) -> str:
+    if len(mentions) == 0:
+        return ''
+
+    return '\n' + str.join(', ', map(str, mentions))
+
+
 async def main_routine(config: Config):
     await notify('===========\n**Bot started**\n===========', config.webhook)
 
@@ -131,10 +147,10 @@ async def main_routine(config: Config):
         if error is None:
             message = f'Successful backup! Archive: `{archive_name}`'
         else:
-            message = f'**ERROR**\n{error}'
+            message = f'**ERROR**{get_mentions(config.error_mentions)}\n{error}'
 
         if warning is not None:
-            message += f'\n\n**WARNING**\n{warning}'
+            message += f'\n\n**WARNING**{get_mentions(config.warning_mentions)}\n{warning}'
 
         await notify(message, config.webhook)
         await sleep(config.iteration_time if error is None else config.error_iteration_time)
