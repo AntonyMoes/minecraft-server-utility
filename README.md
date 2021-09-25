@@ -1,4 +1,4 @@
-# minecraft-server-utility
-Bot for backups and status
+# backup-utility
+Bot for backups with discord status
 
 Config: [config.json](config.json)
