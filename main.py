@@ -6,7 +6,7 @@ import json
 from dataclasses import dataclass
 from dacite import from_dict, exceptions
 from contextlib import ExitStack
-from paramiko import SSHClient, SSHException
+from paramiko import SSHClient, SSHException, AutoAddPolicy
 from typing import NewType, Optional
 from scp import SCPClient, SCPException
 from datetime import datetime
@@ -43,6 +43,7 @@ def get_command_outputs(ssh: SSHClient, command: str) -> (str, str):
 async def backup(config: Config) -> (str, Optional[Error]):
     with ExitStack() as stack:
         ssh = SSHClient()
+        ssh.set_missing_host_key_policy(AutoAddPolicy())
         stack.callback(ssh.close)
 
         try:
