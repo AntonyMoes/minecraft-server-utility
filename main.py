@@ -37,6 +37,8 @@ class Config:
     server_use_host_keys: bool
     server_password: str
     server_minecraft_directory: str
+    server_before_save_command: str
+    server_after_save_command: str
     backup_directory: str
     backup_allowed_gigabytes: float
     backup_warning_ratio: float
@@ -71,10 +73,19 @@ async def backup(config: Config) -> (str, Optional[Error]):
 
         archive_name = f'world-{datetime.now().strftime("%Y-%m-%d_%H_%M")}.tar.gz'
         stack.callback(lambda: ssh.exec_command(f'{cd} && rm {archive_name}'))
+        if len(config.server_before_save_command) > 0:
+            _, err = get_command_outputs(ssh, f'{cd} && {config.server_before_save_command}')
+            if len(err) > 0:
+                return '', Error(f'Error while executing before_save_command "{config.server_before_save_command}": {err}')
 
         _, err = get_command_outputs(ssh, f'{cd} && tar -czf {archive_name} world')
         if len(err) > 0:
             return '', Error(f'Could not compress minecraft world: {err}')
+
+        if len(config.server_after_save_command) > 0:
+            _, err = get_command_outputs(ssh, f'{cd} && {config.server_after_save_command}')
+            if len(err) > 0:
+                return '', Error(f'Error while executing after_save_command "{config.server_after_save_command}": {err}')
 
         scp = SCPClient(ssh.get_transport())
         stack.callback(scp.close)
