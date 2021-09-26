@@ -81,7 +81,7 @@ async def backup(config: Config) -> (str, Optional[Error]):
 
         try:
             scp.get(f'{config.server_minecraft_directory}/{archive_name}', local_path=config.backup_directory)
-        except SCPException as e:
+        except (SCPException, OSError) as e:
             return '', Error(f'Could not copy archive to the local directory {config.backup_directory}: {e}')
 
     return archive_name, None
