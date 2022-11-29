@@ -87,7 +87,7 @@ async def backup(config: Config) -> (str, Optional[Error]):
             if len(err) > 0:
                 return '', Error(f'Error while executing after_save_command "{config.server_after_save_command}": {err}')
 
-        scp = SCPClient(ssh.get_transport())
+        scp = SCPClient(ssh.get_transport(), socket_timeout=1800)
         stack.callback(scp.close)
 
         try:
