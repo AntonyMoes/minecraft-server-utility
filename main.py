@@ -1,19 +1,25 @@
-from asyncio import get_event_loop, AbstractEventLoop, sleep
-import aiohttp
+import asyncio
 import json
-from dataclasses import dataclass
-from dacite import from_dict, exceptions
-from contextlib import ExitStack
-from paramiko import SSHClient, SSHException, AutoAddPolicy
-from typing import NewType, Optional
-from scp import SCPClient, SCPException
-from datetime import datetime
 import os
+import time
 import sys
+from asyncio import sleep
+from contextlib import ExitStack
+from dataclasses import dataclass
+from datetime import datetime
+from typing import NewType, Optional
+
+import aiohttp
+from dacite import from_dict, exceptions
+from paramiko import SSHClient, SSHException, AutoAddPolicy
+from scp import SCPClient, SCPException
 
 DEFAULT_CONFIG_FILE = 'config.json'
 ERROR_CODE = 1
 SERVER_ENCODING = 'utf-8'
+
+WEBHOOK = ''
+NOTIFICATION_QUEUE = asyncio.Queue()
 
 Warning = NewType('Warning', str)
 Error = NewType('Error', str)
@@ -49,8 +55,11 @@ class Config:
 
 
 def get_command_outputs(ssh: SSHClient, command: str) -> (str, str):
-    _, stdout, stderr = ssh.exec_command(command)
-    return str(stdout.read().decode(SERVER_ENCODING)), str(stderr.read().decode(SERVER_ENCODING))
+    try:
+        _, stdout, stderr = ssh.exec_command(command)
+        return str(stdout.read().decode(SERVER_ENCODING)), str(stderr.read().decode(SERVER_ENCODING))
+    except:
+        return '', f'Error executing command "{command}", **POSSIBLY CONNECTION ISSUES**'
 
 
 async def backup(config: Config) -> (str, Optional[Error]):
@@ -73,11 +82,20 @@ async def backup(config: Config) -> (str, Optional[Error]):
             return '', Error(f'Could not open server directory "{config.server_directory}": {err}')
 
         archive_name = f'{config.backup_name_prefix}-{datetime.now().strftime("%Y-%m-%d_%H_%M")}.tar.gz'
-        stack.callback(lambda: ssh.exec_command(f'{cd} && rm {archive_name}'))
+
+        def clean_up():
+            try:
+                ssh.exec_command(f'{cd} && rm {archive_name}')
+            except SSHException:
+                pass
+
+        stack.callback(clean_up)
+
         if len(config.server_before_save_command) > 0:
             _, err = get_command_outputs(ssh, f'{cd} && {config.server_before_save_command}')
             if len(err) > 0:
-                return '', Error(f'Error while executing before_save_command "{config.server_before_save_command}": {err}')
+                return '', Error(
+                    f'Error while executing before_save_command "{config.server_before_save_command}": {err}')
 
         directory_name = os.path.normpath(config.server_directory)
         _, err = get_command_outputs(ssh, f'{cd} && tar -czf {archive_name} {directory_name}')
@@ -87,9 +105,10 @@ async def backup(config: Config) -> (str, Optional[Error]):
         if len(config.server_after_save_command) > 0:
             _, err = get_command_outputs(ssh, f'{cd} && {config.server_after_save_command}')
             if len(err) > 0:
-                return '', Error(f'Error while executing after_save_command "{config.server_after_save_command}": {err}')
+                return '', Error(
+                    f'Error while executing after_save_command "{config.server_after_save_command}": {err}')
 
-        scp = SCPClient(ssh.get_transport())
+        scp = SCPClient(ssh.get_transport(), socket_timeout=1800)
         stack.callback(scp.close)
 
         try:
@@ -129,15 +148,44 @@ def check_local(config: Config) -> (Optional[Warning], Optional[Error]):
     return warning, None
 
 
-async def notify(message: str, webhook: str):
-    print(f"LOG: {message}")
-    if len(webhook) == 0:
+async def send(message: str) -> bool:
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(WEBHOOK, json={'content': message}) as response:
+                resp = await response.read()
+                print(resp)
+                return True
+    except:
+        return False
+
+
+async def notify(message: str):
+    if len(WEBHOOK) == 0:
         return
 
-    async with aiohttp.ClientSession() as session:
-        async with session.post(webhook, json={'content': message}) as response:
-            resp = await response.read()
-            print(resp)
+    print(f'NOTIFY: {message}')
+
+    success = await send(message)
+    if not success:
+        await NOTIFICATION_QUEUE.put(message)
+
+
+async def send_notifications_routine():
+    while True:
+        message = await NOTIFICATION_QUEUE.get()
+
+        print(f'RETRY NOTIFY: {message}')
+
+        iteration = 0
+        success = await send(message)
+        while not success:
+            print(f'RETRY ITERATION {iteration} FAILED')
+            iteration += 1
+
+            await asyncio.sleep(5)
+            success = await send(message)
+
+        print(f'RETRY ITERATION {iteration} SUCCESS')
 
 
 def get_mentions(mentions: list[Mention]) -> str:
@@ -147,10 +195,11 @@ def get_mentions(mentions: list[Mention]) -> str:
     return '\n' + str.join(', ', map(str, mentions))
 
 
-async def main_routine(config: Config):
-    await notify('===========\n**Bot started**\n===========', config.webhook)
+async def backup_routine(config: Config):
+    await notify('===========\n**Bot started**\n===========')
 
     while True:
+        start_iteration_time = time.time()
         archive_name = ''
 
         warning, error = check_local(config)
@@ -165,8 +214,24 @@ async def main_routine(config: Config):
         if warning is not None:
             message += f'\n\n**WARNING**{get_mentions(config.warning_mentions)}\n{warning}'
 
-        await notify(message, config.webhook)
-        await sleep(config.iteration_time if error is None else config.error_iteration_time)
+        await notify(message)
+
+        iteration_duration = int(time.time() - start_iteration_time)
+
+        sleep_time = config.iteration_time if error is None else config.error_iteration_time
+        remaining_sleep_time = max(0, sleep_time - iteration_duration)
+
+        await sleep(remaining_sleep_time)
+
+
+async def main_routine(config: Config):
+    global WEBHOOK
+    WEBHOOK = config.webhook
+
+    await asyncio.gather(
+        backup_routine(config),
+        send_notifications_routine()
+    )
 
 
 def main():
@@ -192,9 +257,12 @@ def main():
         print(e)
         exit(ERROR_CODE)
 
-    loop: AbstractEventLoop = get_event_loop()
-    loop.run_until_complete(main_routine(config))
+    asyncio.run(main_routine(config))
 
 
 if __name__ == '__main__':
     main()
+
+# TODO:
+# 1. Add tasks in queue so they would execute after connection issues are gone
+# 2. Separate into files
