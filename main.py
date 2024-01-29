@@ -65,14 +65,13 @@ def get_command_outputs(ssh: SSHClient, command: str) -> (str, str):
 async def backup(config: Config) -> (str, Optional[Error]):
     with ExitStack() as stack:
         ssh = SSHClient()
-        ssh.set_missing_host_key_policy(AutoAddPolicy())
         ssh.load_system_host_keys()
+        ssh.set_missing_host_key_policy(AutoAddPolicy())
         stack.callback(ssh.close)
 
         password = config.server_password if not config.server_use_host_keys else None
         try:
-            ssh.connect(hostname=config.server_host, username=config.server_user, password=password,
-                        disabled_algorithms={'pubkeys': ['rsa-sha2-256', 'rsa-sha2-512']})
+            ssh.connect(hostname=config.server_host, username=config.server_user, password=password)
         except (OSError, SSHException) as e:
             return '', Error(f'Error while connecting to {config.server_user}@{config.server_host}: {e}')
 
@@ -97,7 +96,7 @@ async def backup(config: Config) -> (str, Optional[Error]):
                 return '', Error(
                     f'Error while executing before_save_command "{config.server_before_save_command}": {err}')
 
-        directory_name = os.path.normpath(config.server_directory)
+        directory_name = os.path.basename(os.path.normpath(config.server_directory))
         _, err = get_command_outputs(ssh, f'{cd} && tar -czf {archive_name} {directory_name}')
         if len(err) > 0:
             return '', Error(f'Could not compress backup archive: {err}')
