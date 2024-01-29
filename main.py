@@ -9,8 +9,9 @@ from typing import NewType, Optional
 from scp import SCPClient, SCPException
 from datetime import datetime
 import os
+import sys
 
-CONFIG_FILE = 'config.json'
+DEFAULT_CONFIG_FILE = 'config.json'
 ERROR_CODE = 1
 SERVER_ENCODING = 'utf-8'
 
@@ -36,9 +37,10 @@ class Config:
     server_user: str
     server_use_host_keys: bool
     server_password: str
-    server_minecraft_directory: str
+    server_directory: str
     server_before_save_command: str
     server_after_save_command: str
+    backup_name_prefix: str
     backup_directory: str
     backup_allowed_gigabytes: float
     backup_warning_ratio: float
@@ -55,32 +57,32 @@ async def backup(config: Config) -> (str, Optional[Error]):
     with ExitStack() as stack:
         ssh = SSHClient()
         ssh.set_missing_host_key_policy(AutoAddPolicy())
+        ssh.load_system_host_keys()
         stack.callback(ssh.close)
 
+        password = config.server_password if not config.server_use_host_keys else None
         try:
-            if config.server_use_host_keys:
-                ssh.load_system_host_keys()
-                ssh.connect(hostname=config.server_host, username=config.server_user)
-            else:
-                ssh.connect(hostname=config.server_host, username=config.server_user, password=config.server_password)
+            ssh.connect(hostname=config.server_host, username=config.server_user, password=password,
+                        disabled_algorithms={'pubkeys': ['rsa-sha2-256', 'rsa-sha2-512']})
         except (OSError, SSHException) as e:
             return '', Error(f'Error while connecting to {config.server_user}@{config.server_host}: {e}')
 
-        cd = f'cd {config.server_minecraft_directory} && ls -la'
+        cd = f'cd {config.server_directory}/../ && ls -la'
         out, err = get_command_outputs(ssh, cd)
         if len(err) > 0:
-            return '', Error(f'Could not open minecraft directory "{config.server_minecraft_directory}": {err}')
+            return '', Error(f'Could not open server directory "{config.server_directory}": {err}')
 
-        archive_name = f'world-{datetime.now().strftime("%Y-%m-%d_%H_%M")}.tar.gz'
+        archive_name = f'{config.backup_name_prefix}-{datetime.now().strftime("%Y-%m-%d_%H_%M")}.tar.gz'
         stack.callback(lambda: ssh.exec_command(f'{cd} && rm {archive_name}'))
         if len(config.server_before_save_command) > 0:
             _, err = get_command_outputs(ssh, f'{cd} && {config.server_before_save_command}')
             if len(err) > 0:
                 return '', Error(f'Error while executing before_save_command "{config.server_before_save_command}": {err}')
 
-        _, err = get_command_outputs(ssh, f'{cd} && tar -czf {archive_name} world')
+        directory_name = os.path.normpath(config.server_directory)
+        _, err = get_command_outputs(ssh, f'{cd} && tar -czf {archive_name} {directory_name}')
         if len(err) > 0:
-            return '', Error(f'Could not compress minecraft world: {err}')
+            return '', Error(f'Could not compress backup archive: {err}')
 
         if len(config.server_after_save_command) > 0:
             _, err = get_command_outputs(ssh, f'{cd} && {config.server_after_save_command}')
@@ -91,7 +93,7 @@ async def backup(config: Config) -> (str, Optional[Error]):
         stack.callback(scp.close)
 
         try:
-            scp.get(f'{config.server_minecraft_directory}/{archive_name}', local_path=config.backup_directory)
+            scp.get(f'{config.server_directory}/{archive_name}', local_path=config.backup_directory)
         except (SCPException, OSError) as e:
             return '', Error(f'Could not copy archive to the local directory {config.backup_directory}: {e}')
 
@@ -168,17 +170,18 @@ async def main_routine(config: Config):
 
 
 def main():
+    config_file = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_CONFIG_FILE
+
     try:
-        with open(CONFIG_FILE) as config_file:
-            config_dict = json.load(config_file)
+        with open(config_file) as file:
+            config_dict = json.load(file)
     except OSError:
-        print(f'Could not open config file "{CONFIG_FILE}"')
+        print(f'Could not open config file "{config_file}"')
         exit(ERROR_CODE)
     except json.JSONDecodeError as e:
         print(f'Config file invalid: {e}')
         exit(ERROR_CODE)
 
-    config = None
     try:
         config = from_dict(Config, config_dict)
     except exceptions.DaciteError as e:
