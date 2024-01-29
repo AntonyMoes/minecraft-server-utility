@@ -75,7 +75,8 @@ async def backup(config: Config) -> (str, Optional[Error]):
         except (OSError, SSHException) as e:
             return '', Error(f'Error while connecting to {config.server_user}@{config.server_host}: {e}')
 
-        cd = f'cd {config.server_directory}/../ && ls -la'
+        server_directory = f'{config.server_directory}/../'
+        cd = f'cd {server_directory} && ls -la'
         out, err = get_command_outputs(ssh, cd)
         if len(err) > 0:
             return '', Error(f'Could not open server directory "{config.server_directory}": {err}')
@@ -111,7 +112,7 @@ async def backup(config: Config) -> (str, Optional[Error]):
         stack.callback(scp.close)
 
         try:
-            scp.get(f'{config.server_directory}/{archive_name}', local_path=config.backup_directory)
+            scp.get(f'{server_directory}/{archive_name}', local_path=config.backup_directory)
         except (SCPException, OSError) as e:
             return '', Error(f'Could not copy archive to the local directory {config.backup_directory}: {e}')
 
